@@ -3,6 +3,10 @@ project(FlyProbeCncGui LANGUAGES CXX)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
 
+find_package(Qt6 REQUIRED COMPONENTS Widgets SerialPort) # Добавлено SerialPort
+
+
+
 qt_standard_project_setup()
 
 qt_add_executable(FlyProbeCncGui
@@ -11,6 +15,9 @@ qt_add_executable(FlyProbeCncGui
     mainwindow.cpp
     mainwindow.h
     mainwindow.ui
+    jsonparser.h
+    jsonparser.cpp
+    Point.h
 )
 
 target_link_libraries(FlyProbeCncGui
@@ -18,6 +25,8 @@ target_link_libraries(FlyProbeCncGui
         Qt::Core
         Qt::Widgets
 )
+
+target_link_libraries(FlyProbeCncGui PRIVATE Qt6::Widgets Qt6::SerialPort)
 
 include(GNUInstallDirs)
 
