@@ -5,6 +5,8 @@
 #include <QJsonArray>
 #include <QRegularExpression>
 
+using namespace std;
+
 vector<Point> JsonParser::parseJsonFile(const QString &filePath, QString &errorString) {
     vector<Point> route;
 
@@ -36,8 +38,9 @@ vector<Point> JsonParser::parseJsonFile(const QString &filePath, QString &errorS
     QString jsonText = QString::fromUtf8(fileData);
     QStringList orderedKeys;
 
-    // ИЗМЕНЕНО: Регулярное выражение теперь ищет только те ключи, которые заканчиваются на _7
-    QRegularExpression keyRegex("\"(D\\d+_7)\"\\s*:\\s*\\{");
+    // ИЗМЕНЕНО: Регулярное выражение теперь ищет ЛЮБЫЕ ключи, начинающиеся на D и содержащие цифры
+    // Например: "D1", "D12_7", "D105"
+    QRegularExpression keyRegex("\"(D\\d+(?:_\\d+)?)\"\\s*:\\s*\\{");
     QRegularExpressionMatchIterator it = keyRegex.globalMatch(jsonText);
     while (it.hasNext()) {
         QRegularExpressionMatch match = it.next();
@@ -47,11 +50,21 @@ vector<Point> JsonParser::parseJsonFile(const QString &filePath, QString &errorS
         }
     }
 
+    // Если регулярка из-за форматирования текста дала сбой, делаем надежный запасной сборщик
+    if (orderedKeys.isEmpty()) {
+        QStringList allKeys = dotsObj.keys();
+        for (const QString &key : allKeys) {
+            if (key.startsWith("D")) {
+                orderedKeys.append(key);
+            }
+        }
+    }
+
     int currentId = 1;
 
     for (const QString &key : orderedKeys) {
-        // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Пропускаем ключ, если он не оканчивается на _7
-        if (!key.endsWith("_7")) continue;
+        // Проверяем, что ключ действительно начинается на букву 'D'
+        if (!key.startsWith("D")) continue;
 
         QJsonObject dotData = dotsObj[key].toObject();
 
@@ -73,6 +86,8 @@ vector<Point> JsonParser::parseJsonFile(const QString &filePath, QString &errorS
                     p.id = currentId++;
                     p.x = targetView["L"].toDouble();
                     p.y = targetView["T"].toDouble();
+                    // Поле p.status автоматически выставится в PointStatus::Pending из point.h
+
                     route.push_back(p);
                 }
             }
@@ -80,7 +95,7 @@ vector<Point> JsonParser::parseJsonFile(const QString &filePath, QString &errorS
     }
 
     if (route.empty()) {
-        errorString = "Точки, заканчивающиеся на _7, не найдены!";
+        errorString = "Точки, начинающиеся на букву 'D', в файле не найдены!";
     } else {
         errorString = "";
     }

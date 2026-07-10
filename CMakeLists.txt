@@ -2,9 +2,8 @@ cmake_minimum_required(VERSION 3.19)
 project(FlyProbeCncGui LANGUAGES CXX)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
-
-find_package(Qt6 REQUIRED COMPONENTS Widgets SerialPort) # Добавлено SerialPort
-
+find_package(Qt6 REQUIRED COMPONENTS Widgets SerialPort)
+find_package(Qt6 REQUIRED COMPONENTS Multimedia MultimediaWidgets)
 
 
 qt_standard_project_setup()
@@ -18,6 +17,8 @@ qt_add_executable(FlyProbeCncGui
     jsonparser.h
     jsonparser.cpp
     Point.h
+    style.qss
+    scan.h scan.cpp
 )
 
 target_link_libraries(FlyProbeCncGui
@@ -27,6 +28,7 @@ target_link_libraries(FlyProbeCncGui
 )
 
 target_link_libraries(FlyProbeCncGui PRIVATE Qt6::Widgets Qt6::SerialPort)
+target_link_libraries(FlyProbeCncGui PRIVATE Qt6::Multimedia Qt6::MultimediaWidgets)
 
 include(GNUInstallDirs)
 

@@ -1,0 +1,15 @@
+/* Стиль для панели координат */
+QLineEdit#lineEditCoordinates {
+    background-color: #1e1e1e;
+    color: #00ff00;
+    border: 2px solid #333333;
+    border-radius: 4px;
+    padding: 4px;
+}
+
+/* Стиль для консоли лога */
+QTextEdit#logConsole {
+    background-color: #ffffff;
+    color: #000000;
+    border: 1px solid #bcbcbc;
+}

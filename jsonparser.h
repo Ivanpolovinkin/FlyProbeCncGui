@@ -11,3 +11,5 @@ public:
     // Статический метод, чтобы можно было вызывать без создания объекта класса
     static vector<Point> parseJsonFile(const QString &filePath, QString &errorString);
 };
+
+

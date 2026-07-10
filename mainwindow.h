@@ -5,6 +5,7 @@
 #include <QSerialPortInfo>
 
 #include "Point.h"
+#include "scan.h"
 
 using namespace std;
 
@@ -46,5 +47,5 @@ private:
     void updateAvailablePorts();
     void parseStatusString(const QString &statusStr);
     QTimer *statusTimer;
-
+    Scan *scanner;
 };
