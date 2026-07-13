@@ -3,6 +3,7 @@
 #include <QMainWindow>
 #include <QSerialPort>
 #include <QSerialPortInfo>
+#include <QPushButton>
 
 #include "Point.h"
 #include "scan.h"
@@ -29,6 +30,7 @@ private slots:
     void readData();
     void onMoveClicked();
     void onSelectJsonClicked();
+    void onResetAutoModeClicked();
 
 private:
     Ui::MainWindow *ui;
@@ -40,6 +42,7 @@ private:
     QString machineStatus = "Unknown";
 
     vector<Point> route;
+    vector<QPushButton*> routeButtons;
 
     size_t currentPointIndex = 0;
     bool isAutoMode = false;

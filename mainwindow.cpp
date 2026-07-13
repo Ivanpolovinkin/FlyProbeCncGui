@@ -8,9 +8,7 @@
 #include <QFileDialog>
 #include <QDir>
 #include <QTimer>
-#include <QTextBlock>
-#include <QTextCursor>
-#include <QTextCharFormat>
+#include <QListWidgetItem>
 
 using namespace std;
 
@@ -29,6 +27,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->btnReset, &QPushButton::clicked, this, &MainWindow::onResetClicked);
     connect(ui->btnSelectJson, &QPushButton::clicked, this, &MainWindow::onSelectJsonClicked);
     connect(ui->btnMove, &QPushButton::clicked, this, &MainWindow::onMoveClicked);
+    connect(ui->btnResetAutoMode, &QPushButton::clicked, this, &MainWindow::onResetAutoModeClicked);
 
     connect(serial, &QSerialPort::readyRead, this, &MainWindow::readData);
 
@@ -47,6 +46,7 @@ MainWindow::MainWindow(QWidget *parent)
             serial->write(&cmd, 1);
         }
     });
+
     scanner = new Scan(ui->videoContainer, this);
 
     connect(ui->tab_2, &QTabWidget::currentChanged, this, [this](int index) {
@@ -83,9 +83,14 @@ void MainWindow::onConnectClicked() {
         serial->setFlowControl(QSerialPort::NoFlowControl);
 
         if (serial->open(QIODevice::ReadWrite)) {
-            ui->logConsole->append("[Система]: Порт успешно открыт.");
+            ui->logConsole->addItem("[Система]: Порт успешно открыт.");
             ui->btnConnect->setText("Отключиться");
             statusTimer->start(100);
+
+            // Включаем зеленый цвет (меняем свойство на connected)
+            ui->comboPorts->setProperty("connectionStatus", "connected");
+            ui->comboPorts->style()->unpolish(ui->comboPorts);
+            ui->comboPorts->style()->polish(ui->comboPorts);
         } else {
             QMessageBox::critical(this, "Ошибка", "Не удалось открыть выбранный COM-порт!");
         }
@@ -93,7 +98,12 @@ void MainWindow::onConnectClicked() {
         statusTimer->stop();
         serial->close();
         ui->btnConnect->setText("Подключиться");
-        ui->logConsole->append("[Система]: Соединение закрыто.");
+        ui->logConsole->addItem("[Система]: Соединение закрыто.");
+
+        // Возвращаем красный цвет (меняем свойство на disconnected)
+        ui->comboPorts->setProperty("connectionStatus", "disconnected");
+        ui->comboPorts->style()->unpolish(ui->comboPorts);
+        ui->comboPorts->style()->polish(ui->comboPorts);
     }
 }
 
@@ -108,31 +118,34 @@ void MainWindow::readData() {
         QString trimmedLine = line.trimmed();
         if (trimmedLine.isEmpty()) continue;
 
-        if (trimmedLine.contains("MPos") || trimmedLine.contains("WPos") || trimmedLine.endsWith(">")) {
+        // 1. СЕРВИСНЫЙ ФИЛЬТР: Координаты и подтверждения GRBL
+        if (trimmedLine.contains("MPos") || trimmedLine.contains("WPos") ||
+            trimmedLine.startsWith("<") || trimmedLine.endsWith(">") ||
+            trimmedLine == "ok" || trimmedLine.contains("ok"))
+        {
             if (trimmedLine.contains("MPos") || trimmedLine.contains("WPos")) {
                 parseStatusString(trimmedLine);
             }
-            if (trimmedLine.contains("ok") && isAutoMode) {
+
+            if ((trimmedLine == "ok" || trimmedLine.contains("ok")) && isAutoMode) {
                 if (currentPointIndex >= route.size()) {
-                    ui->logConsole->append("[Система]: Все точки из файла успешно выполнены!");
                     isAutoMode = false;
                     ui->btnMove->setEnabled(true);
+
+                    // Только по окончании всего файла выводим финальное сообщение в текстовом виде
+                    ui->logConsole->clear(); // Очищаем список от кнопок, так как работа завершена
+                    ui->logConsole->addItem("[Система]: Все точки из файла успешно выполнены!");
                 }
             }
+            continue;
         }
-        else {
-            if (trimmedLine.contains("ok")) {
-                if (isAutoMode) {
-                    if (currentPointIndex >= route.size()) {
-                        ui->logConsole->append("[Система]: Все точки из файла успешно выполнены!");
-                        isAutoMode = false;
-                        ui->btnMove->setEnabled(true);
-                    }
-                }
-            } else {
-                ui->logConsole->append("[GRBL]: " + trimmedLine);
-            }
+
+        if (isAutoMode) {
+            continue;
         }
+
+        ui->logConsole->addItem("[GRBL]: " + trimmedLine);
+        ui->logConsole->scrollToBottom();
     }
 }
 
@@ -142,7 +155,7 @@ void MainWindow::onResetClicked() { if (serial->isOpen()) { char cmd = 0x18; ser
 
 void MainWindow::onMoveClicked() {
     if (!serial->isOpen()) {
-        ui->logConsole->append("[Система]: Ошибка. Станок не подключен!");
+        ui->logConsole->addItem("[Система]: Ошибка. Станок не подключен!");
         return;
     }
 
@@ -155,15 +168,20 @@ void MainWindow::onMoveClicked() {
 
             gcode = QString("G90 G1 X%1 Y%2 F%3\n").arg(p.x).arg(p.y).arg(strF);
 
-            // КОД ОКРАШИВАНИЯ ОТСЮДА ПОЛНОСТЬЮ УДАЛЕН
+            // КРАСИМ ТЕКУЩУЮ КНОПКУ В ОРАНЖЕВЫЙ ЦВЕТ СТРОГО ДО СДВИГА ИНДЕКСА
+            if (currentPointIndex < routeButtons.size() && routeButtons[currentPointIndex]) {
+                routeButtons[currentPointIndex]->setStyleSheet(
+                    "QPushButton { background-color: #ffe0b2; border: none; text-align: left; padding: 6px 10px; font-size: 13px; font-weight: bold; }"
+                    );
+            }
 
             currentPointIndex++;
-            ui->btnMove->setEnabled(false); // Блокируем кнопку до прибытия станка
+            ui->btnMove->setEnabled(false); // Блокируем кнопку, станок пошел работать
 
             serial->write(gcode.toUtf8());
         }
     } else {
-        // Ручной режим (без изменений)
+        // Ручной режим
         QString gMode = ui->radioAbs->isChecked() ? "G90" : "G91";
         QString strX = ui->lineMoveX->text().isEmpty() ? "0" : ui->lineMoveX->text();
         QString strY = ui->lineMoveY->text().isEmpty() ? "0" : ui->lineMoveY->text();
@@ -171,10 +189,11 @@ void MainWindow::onMoveClicked() {
         strX.replace(",", "."); strY.replace(",", ".");
 
         gcode = QString("%1 G1 X%2 Y%3 F%4\n").arg(gMode, strX, strY, strF);
-        ui->logConsole->append("[Передача -> GRBL]: " + gcode.trimmed());
+        ui->logConsole->addItem("[Передача -> GRBL]: " + gcode.trimmed());
         serial->write(gcode.toUtf8());
     }
 }
+
 void MainWindow::onSelectJsonClicked() {
     QString targetPath = QCoreApplication::applicationDirPath() + "/json_trajectories";
 
@@ -194,17 +213,7 @@ void MainWindow::onSelectJsonClicked() {
     isAutoMode = true;
 
     ui->logConsole->clear();
-
-    // Отключаем переносы строк и убираем внутренние поля документа, чтобы краска ложилась вплотную к краям
-    ui->logConsole->setLineWrapMode(QTextEdit::NoWrap);
-    ui->logConsole->document()->setDocumentMargin(0);
-
-    QTextCursor cursor(ui->logConsole->document());
-
-    // Настраиваем формат блока для КРАСНОГО фона (на всю ширину)
-    QTextBlockFormat redBlockFormat;
-    redBlockFormat.setBackground(QColor("#ffcccc")); // Светло-красный
-    // УДАЛЕНО: redBlockFormat.setPadding(2); — этот метод вызывал ошибку
+    routeButtons.clear();
 
     for (size_t i = 0; i < route.size(); ++i) {
         QString textRow = QString("[Точка №%1]: X = %2, Y = %3")
@@ -212,17 +221,81 @@ void MainWindow::onSelectJsonClicked() {
                               .arg(route[i].x, 0, 'f', 3)
                               .arg(route[i].y, 0, 'f', 3);
 
-        // Устанавливаем формат для текущей строки
-        cursor.setBlockFormat(redBlockFormat);
-        cursor.insertText(textRow);
+        QPushButton *btn = new QPushButton(textRow);
+        btn->setStyleSheet(
+            "QPushButton {"
+            "  background-color: #ffcccc;"
+            "  border: none;"
+            "  text-align: left;"
+            "  padding: 6px 10px;"
+            "  font-size: 13px;"
+            "}"
+            "QPushButton:hover { background-color: #ffb3b3; }"
+            );
+        btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
-        // Если это не последняя точка, создаем новый блок (строку)
-        if (i < route.size() - 1) {
-            cursor.insertBlock();
-        }
+        connect(btn, &QPushButton::clicked, this, [this, i]() {
+
+            if (i == (currentPointIndex - 1) && !ui->btnMove->isEnabled()) {
+                return;
+            }
+
+            for (size_t k = 0; k < route.size(); ++k) {
+
+                if (k >= i || route[k].status == PointStatus::Pending) {
+                    route[k].status = PointStatus::Pending;
+
+                    if (k < routeButtons.size() && routeButtons[k]) {
+                        routeButtons[k]->setStyleSheet(
+                            "QPushButton { background-color: #ffcccc; border: none; text-align: left; padding: 6px 10px; font-size: 13px; }"
+                            );
+                    }
+                }
+            }
+
+            // Устанавливаем индекс строго на выбранную кнопку
+            currentPointIndex = i;
+
+            // Разблокируем кнопку управления, чтобы onMoveClicked сработал штатно
+            ui->btnMove->setEnabled(true);
+            onMoveClicked(); // Метод окрасит строго ТЕКУЩУЮ точку в оранжевый цвет
+        });
+
+        QListWidgetItem *item = new QListWidgetItem(ui->logConsole);
+        item->setSizeHint(QSize(0, 30));
+        ui->logConsole->addItem(item);
+        ui->logConsole->setItemWidget(item, btn);
+
+        routeButtons.push_back(btn);
     }
 
     ui->btnMove->setEnabled(true);
+}
+
+void MainWindow::onResetAutoModeClicked() {
+    // 1. Если автомат и так не был активен, просто очищаем лог на всякий случай
+    if (!isAutoMode && routeButtons.empty()) {
+        ui->logConsole->clear();
+        ui->logConsole->addItem("[Система]: Готов к ручному вводу координат.");
+        return;
+    }
+
+    // 2. Выключаем режим автоматического обхода
+    isAutoMode = false;
+    currentPointIndex = 0;
+
+    // 3. Полностью очищаем память и интерфейс от интерактивных кнопок траектории
+    ui->logConsole->clear();
+    routeButtons.clear(); // Очищаем вектор указателей
+
+    // 4. Возвращаем кнопку ручного движения в активное состояние
+    ui->btnMove->setEnabled(true);
+
+    // 5. Выводим приветственное системное сообщение, подтверждающее ручной режим
+    ui->logConsole->addItem("[Система]: Автоматический режим сброшен. Консоль переведена в ручное ЧПУ-управление.");
+    ui->logConsole->scrollToBottom();
+
+    qDebug() << "[Система]: Маршрут JSON успешно выгружен оператором.";
 }
 
 void MainWindow::parseStatusString(const QString &statusStr) {
@@ -259,29 +332,30 @@ void MainWindow::parseStatusString(const QString &statusStr) {
         // ЛОГИКА АВТОМАТИЧЕСКОГО ОБХОДА ПРИ ПОЛУЧЕНИИ IDLE
         if (isAutoMode && machineStatus.toLower() == "idle") {
 
-            // Проверяем: если станок только что доехал до точки — красим её в зелёный
-            if (currentPointIndex > 0 && route[currentPointIndex - 1].status == PointStatus::Pending) {
+            if (currentPointIndex > 0) {
                 size_t finishedIdx = currentPointIndex - 1;
-                route[finishedIdx].status = PointStatus::Completed;
 
-                // Находим блок (строку) отработавшей точки по индексу
-                QTextBlock block = ui->logConsole->document()->findBlockByNumber(static_cast<int>(finishedIdx));
-                if (block.isValid()) {
-                    QTextCursor cursor(block);
+                // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Проверяем, что станок ДЕЙСТВИТЕЛЬНО доехал до координат этой точки!
+                double diffX = std::abs(wPosX - route[finishedIdx].x);
+                double diffY = std::abs(wPosY - route[finishedIdx].y);
 
-                    // Модифицируем формат строки (абзаца), чтобы залить её зелёным на 100% ширины
-                    QTextBlockFormat greenBlockFormat = block.blockFormat();
-                    greenBlockFormat.setBackground(QColor("#ccffcc")); // Салатовый
+                if (diffX < 0.05 && diffY < 0.05) {
+                    route[finishedIdx].status = PointStatus::Completed;
 
-                    cursor.setBlockFormat(greenBlockFormat);
-                }
-            }
+                    // КРАСИМ КНОПКУ В ЗЕЛЕНЫЙ ЦВЕТ ТОЛЬКО ПО ПРИБЫТИЮ НА ТЕКУЩИЕ КООРДИНАТЫ
+                    if (finishedIdx < routeButtons.size() && routeButtons[finishedIdx]) {
+                        routeButtons[finishedIdx]->setStyleSheet(
+                            "QPushButton { background-color: #ccffcc; border: none; text-align: left; padding: 6px 10px; font-size: 13px; }"
+                            );
+                    }
 
-            // Автоматически шагаем дальше, если есть куда ехать
-            if (currentPointIndex < route.size()) {
-                if (!ui->btnMove->isEnabled()) {
-                    ui->btnMove->setEnabled(true);
-                    onMoveClicked(); // Запускает движение к следующей точке
+                    // ШАГАЕМ ДАЛЬШЕ: Переходим к следующей точке только если текущая успешно завершена
+                    if (currentPointIndex < route.size()) {
+                        if (!ui->btnMove->isEnabled()) {
+                            ui->btnMove->setEnabled(true);
+                            onMoveClicked();
+                        }
+                    }
                 }
             }
         }

@@ -1,15 +1,72 @@
-/* Стиль для панели координат */
-QLineEdit#lineEditCoordinates {
-    background-color: #1e1e1e;
-    color: #00ff00;
-    border: 2px solid #333333;
-    border-radius: 4px;
-    padding: 4px;
+/* ==========================================================================
+   ДИНАМИЧЕСКИЕ КНОПКИ ТОЧЕК МАРШРУТА (Внутри QListWidget)
+   ========================================================================== */
+/* Обычное состояние точки (Красное) */
+QPushButton[routeStatus="pending"] {
+  background-color: #ffcccc;
+  border: none;
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+QPushButton[routeStatus="pending"]:hover {
+  background-color: #ffb3b3;
 }
 
-/* Стиль для консоли лога */
-QTextEdit#logConsole {
-    background-color: #ffffff;
-    color: #000000;
-    border: 1px solid #bcbcbc;
+/* Активная точка в процессе движения (Оранжевая) */
+QPushButton[routeStatus="active"] {
+  background-color: #ffe0b2;
+  border: none;
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: bold;
 }
+
+/* Успешно выполненная точка маршрута (Зеленая) */
+QPushButton[routeStatus="completed"] {
+  background-color: #ccffcc;
+  border: none;
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+/* ==========================================================================
+   БАЗОВЫЕ КОМПОНЕНТЫ ИНТЕРФЕЙСА
+   ========================================================================== */
+/* Панель текущих координат */
+QLineEdit#lineEditCoordinates {
+  background-color: #1e1e1e;
+  color: #00ff00;
+  border: 2px solid #333333;
+  border-radius: 4px;
+  padding: 4px;
+}
+
+/* Консоль общего лога */
+QListWidget#logConsole {
+  background-color: #ffffff;
+  color: #000000;
+  border: 1px solid #bcbcbc;
+}
+
+QComboBox#comboPorts {
+    border-radius: 4px;
+    padding: 3px 5px;
+    min-height: 20px;
+    font-weight: bold;
+    background-color: #ffffff;
+}
+
+QComboBox#comboPorts::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px;
+    border-left-width: 1px;
+    border-left-style: solid;
+    border-top-right-radius: 3px;
+    border-bottom-right-radius: 3px;
+}
+
+
