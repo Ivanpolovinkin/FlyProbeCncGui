@@ -7,6 +7,7 @@
 
 #include "Point.h"
 #include "scan.h"
+#include "project_parser.h"
 
 using namespace std;
 
@@ -31,6 +32,8 @@ private slots:
     void onMoveClicked();
     void onSelectJsonClicked();
     void onResetAutoModeClicked();
+    void onLoadProjectClicked();
+    void onImageSelectionChanged(int index);
 
 private:
     Ui::MainWindow *ui;
@@ -41,8 +44,11 @@ private:
     double wPosY = 0.0;
     QString machineStatus = "Unknown";
 
+    ProjectScanResult m_projectData;
+
     vector<Point> route;
     vector<QPushButton*> routeButtons;
+    QVector<PinData> m_loadedPins;
 
     size_t currentPointIndex = 0;
     bool isAutoMode = false;

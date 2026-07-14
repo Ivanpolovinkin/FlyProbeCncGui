@@ -19,7 +19,16 @@ qt_add_executable(FlyProbeCncGui
     Point.h
     style.qss
     scan.h scan.cpp
+    pinrectitem.h
+    pinrectitem.cpp
+    probe_view.h
+    probe_view.cpp
+    project_parser.h
+    project_parser.cpp
+    project_data.h
 )
+
+target_include_directories(FlyProbeCncGui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(FlyProbeCncGui
     PRIVATE

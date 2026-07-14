@@ -28,6 +28,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->btnSelectJson, &QPushButton::clicked, this, &MainWindow::onSelectJsonClicked);
     connect(ui->btnMove, &QPushButton::clicked, this, &MainWindow::onMoveClicked);
     connect(ui->btnResetAutoMode, &QPushButton::clicked, this, &MainWindow::onResetAutoModeClicked);
+    connect(ui->btnLoadProject, &QPushButton::clicked, this, &MainWindow::onLoadProjectClicked);
+    connect(ui->comboImages, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onImageSelectionChanged);
 
     connect(serial, &QSerialPort::readyRead, this, &MainWindow::readData);
 
@@ -359,5 +361,96 @@ void MainWindow::parseStatusString(const QString &statusStr) {
                 }
             }
         }
+    }
+}
+
+void MainWindow::onLoadProjectClicked() {
+    // 1. Задаем приоритетный путь для разработки
+    QString defaultPath = "C:/Users/ven/Documents/FlyProbeCncGui/Projects";
+
+    // Если папки по этому абсолютному пути не существует (например, на другом ПК),
+    // то откатываемся на папку "Projects" рядом с исполняемым файлом программы
+    if (!QDir(defaultPath).exists()) {
+        defaultPath = QCoreApplication::applicationDirPath() + "/Projects";
+
+        // Создаем её автоматически для удобства, если её ещё нет
+        QDir().mkpath(defaultPath);
+    }
+
+    // 2. Открываем проводник сразу в целевой папке
+    QString projectDir = QFileDialog::getExistingDirectory(
+        this,
+        "Выбрать папку проекта ЧПУ",
+        defaultPath
+        );
+
+    if (projectDir.isEmpty()) return;
+
+    // 3. Сканируем выбранную папку проекта с помощью нашего парсера
+    ProjectParser parser;
+    QString errorMsg;
+    m_projectData = parser.scanProjectDir(projectDir, errorMsg);
+
+    if (!errorMsg.isEmpty()) {
+        QMessageBox::warning(this, "Ошибка проекта", errorMsg);
+        return;
+    }
+
+    // Блокируем сигналы комбобокса, чтобы при его очистке не вызывалась лишняя отрисовка сцены
+    ui->comboImages->blockSignals(true);
+    ui->comboImages->clear();
+
+    // 4. Заполняем выпадающий список comboImages именами найденных JPG-файлов
+    for (const QString &path : m_projectData.imagePaths) {
+        ui->comboImages->addItem(QFileInfo(path).fileName());
+    }
+
+    ui->comboImages->blockSignals(false);
+
+    // 5. Если изображения найдены — принудительно выбираем первое и отрисовываем его
+    if (!m_projectData.imagePaths.isEmpty()) {
+        ui->comboImages->setCurrentIndex(0);
+        onImageSelectionChanged(0);
+    } else {
+        ui->listPins->clear();
+        ui->listPins->addItem("[Система]: В папке 'Виды' отсутствуют JPG файлы.");
+    }
+}
+
+void MainWindow::onImageSelectionChanged(int index) {
+    if (index < 0 || index >= m_projectData.imagePaths.size()) return;
+
+    ProjectParser parser;
+    QString activeImagePath = m_projectData.imagePaths[index];
+
+    // 1. Загружаем выбранный JPG файл на графический холст ProbeView
+    ui->probeGraphicsView->loadImage(activeImagePath);
+
+    // 2. Читаем бинарные метаданные JPG и вытаскиваем ID слоя (C++ аналог index_parser)
+    QString targetIndex = parser.extractIndexFromJpgBinary(activeImagePath);
+    qDebug() << "[Интерфейс]: Из бинарного JPG получен ID слоя:" << targetIndex;
+
+    // Очищаем текстовый список точек перед новой загрузкой
+    ui->listPins->clear();
+
+    // 3. Если файл Points существует и ID слоя найден — парсим JSON-базу данных точек
+    if (!m_projectData.pointsFilePath.isEmpty() && !targetIndex.isEmpty()) {
+        bool ok = false;
+        // Читаем точки из JSON файла Points по нашему ID слоя
+        m_loadedPins = parser.parseJsonPointsForId(m_projectData.pointsFilePath, targetIndex, ok);
+
+        if (ok && !m_loadedPins.isEmpty()) {
+            // Накладываем интерактивные кружки разметки на сцену поверх фото платы
+            ui->probeGraphicsView->displayPins(m_loadedPins);
+
+            // Выводим список найденных точек в правое текстовое поле listPins
+            for (const PinData &pin : m_loadedPins) {
+                ui->listPins->addItem(pin.name);
+            }
+        } else {
+            ui->listPins->addItem("[Система]: Для данного слоя точек разметки в JSON не найдено.");
+        }
+    } else {
+        ui->listPins->addItem("[Система]: Файл 'Points' не найден или в JPG отсутствуют ID-метаданные.");
     }
 }
