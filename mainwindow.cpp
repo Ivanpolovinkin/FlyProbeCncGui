@@ -9,6 +9,8 @@
 #include <QDir>
 #include <QTimer>
 #include <QListWidgetItem>
+#include <QStyle>
+#include <QVideoSink>
 
 using namespace std;
 
@@ -16,6 +18,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
     , serial(new QSerialPort(this))
+    , m_scanController(new ScanController(this))
 {
     ui->setupUi(this);
 
@@ -38,6 +41,10 @@ MainWindow::MainWindow(QWidget *parent)
     ui->lineMoveX->setValidator(coordValidator);
     ui->lineMoveY->setValidator(coordValidator);
 
+    QDoubleValidator *zValidator = new QDoubleValidator(-100.0, 100.0, 3, this);
+    zValidator->setNotation(QDoubleValidator::StandardNotation);
+    ui->lineMoveZ->setValidator(zValidator);
+
     QIntValidator *speedValidator = new QIntValidator(1, 20000, this);
     ui->lineMoveF->setValidator(speedValidator);
 
@@ -51,6 +58,11 @@ MainWindow::MainWindow(QWidget *parent)
 
     scanner = new Scan(ui->videoContainer, this);
 
+    if (ui->videoContainer && ui->videoContainer->videoSink()) {
+        connect(ui->videoContainer->videoSink(), &QVideoSink::videoFrameChanged,
+                this, &MainWindow::onNewVideoFrame);
+    }
+
     connect(ui->tab_2, &QTabWidget::currentChanged, this, [this](int index) {
         if (ui->tab_2->tabText(index).toLower() == "scan") {
             scanner->startCamera();
@@ -58,6 +70,27 @@ MainWindow::MainWindow(QWidget *parent)
             scanner->stopCamera();
         }
     });
+
+    connect(m_scanController, &ScanController::progressUpdated, this, &MainWindow::onScanProgressUpdated);
+    connect(m_scanController, &ScanController::statusTextChanged, this, &MainWindow::onScanStatusTextChanged);
+    connect(m_scanController, &ScanController::gcodeCommandReady, this, &MainWindow::onScanGcodeReady);
+    connect(m_scanController, &ScanController::screenshotRequested, this, &MainWindow::onScanScreenshotRequested);
+    connect(m_scanController, &ScanController::finished, this, &MainWindow::onScanFinished);
+
+    connect(ui->btnSetLT, &QPushButton::clicked, this, &MainWindow::onSetLtClicked);
+    connect(ui->btnSetRB, &QPushButton::clicked, this, &MainWindow::onSetRbClicked);
+    connect(ui->btnSelectDir, &QPushButton::clicked, this, &MainWindow::onSelectDirClicked);
+    connect(ui->btnStartScan, &QPushButton::clicked, this, &MainWindow::onStartScanClicked);
+    connect(ui->btnStopScan, &QPushButton::clicked, this, &MainWindow::onStopScanClicked);
+
+    ui->lineSavePath->setText(QCoreApplication::applicationDirPath() + "/Projects/TempScan");
+
+    QDoubleValidator *stepValidator = new QDoubleValidator(1.0, 100.0, 1, this);
+    stepValidator->setNotation(QDoubleValidator::StandardNotation);
+    ui->lineScanStep->setValidator(stepValidator);
+
+    ui->lineScanStep->clear();
+    ui->lineScanStep->setPlaceholderText("Введите шаг (мм)");
 }
 
 MainWindow::~MainWindow() {
@@ -65,6 +98,25 @@ MainWindow::~MainWindow() {
         serial->close();
     }
     delete ui;
+}
+
+void MainWindow::onNewVideoFrame() {
+    if (!ui->videoContainer || !ui->videoContainer->videoSink()) return;
+
+    QVideoFrame frame = ui->videoContainer->videoSink()->videoFrame();
+    if (frame.isValid()) {
+        if (!frame.isMapped()) {
+            if (frame.map(QVideoFrame::ReadOnly)) {
+                m_lastCameraFrame = frame.toImage().copy();
+
+                frame.unmap();
+            } else {
+                qWarning() << "[Камера]: Не удалось спроецировать видеокадр в ОЗУ.";
+            }
+        } else {
+            m_lastCameraFrame = frame.toImage().copy();
+        }
+    }
 }
 
 void MainWindow::updateAvailablePorts() {
@@ -89,7 +141,6 @@ void MainWindow::onConnectClicked() {
             ui->btnConnect->setText("Отключиться");
             statusTimer->start(100);
 
-            // Включаем зеленый цвет (меняем свойство на connected)
             ui->comboPorts->setProperty("connectionStatus", "connected");
             ui->comboPorts->style()->unpolish(ui->comboPorts);
             ui->comboPorts->style()->polish(ui->comboPorts);
@@ -102,7 +153,6 @@ void MainWindow::onConnectClicked() {
         ui->btnConnect->setText("Подключиться");
         ui->logConsole->addItem("[Система]: Соединение закрыто.");
 
-        // Возвращаем красный цвет (меняем свойство на disconnected)
         ui->comboPorts->setProperty("connectionStatus", "disconnected");
         ui->comboPorts->style()->unpolish(ui->comboPorts);
         ui->comboPorts->style()->polish(ui->comboPorts);
@@ -120,7 +170,6 @@ void MainWindow::readData() {
         QString trimmedLine = line.trimmed();
         if (trimmedLine.isEmpty()) continue;
 
-        // 1. СЕРВИСНЫЙ ФИЛЬТР: Координаты и подтверждения GRBL
         if (trimmedLine.contains("MPos") || trimmedLine.contains("WPos") ||
             trimmedLine.startsWith("<") || trimmedLine.endsWith(">") ||
             trimmedLine == "ok" || trimmedLine.contains("ok"))
@@ -134,8 +183,7 @@ void MainWindow::readData() {
                     isAutoMode = false;
                     ui->btnMove->setEnabled(true);
 
-                    // Только по окончании всего файла выводим финальное сообщение в текстовом виде
-                    ui->logConsole->clear(); // Очищаем список от кнопок, так как работа завершена
+                    ui->logConsole->clear();
                     ui->logConsole->addItem("[Система]: Все точки из файла успешно выполнены!");
                 }
             }
@@ -164,13 +212,13 @@ void MainWindow::onMoveClicked() {
     QString gcode;
 
     if (isAutoMode) {
+        // --- АВТОМАТИЧЕСКИЙ РЕЖИМ (БЕЗ ИЗМЕНЕНИЙ) ---
         if (currentPointIndex < route.size()) {
             Point p = route[currentPointIndex];
             QString strF = ui->lineMoveF->text().isEmpty() ? "1500" : ui->lineMoveF->text();
 
             gcode = QString("G90 G1 X%1 Y%2 F%3\n").arg(p.x).arg(p.y).arg(strF);
 
-            // КРАСИМ ТЕКУЩУЮ КНОПКУ В ОРАНЖЕВЫЙ ЦВЕТ СТРОГО ДО СДВИГА ИНДЕКСА
             if (currentPointIndex < routeButtons.size() && routeButtons[currentPointIndex]) {
                 routeButtons[currentPointIndex]->setStyleSheet(
                     "QPushButton { background-color: #ffe0b2; border: none; text-align: left; padding: 6px 10px; font-size: 13px; font-weight: bold; }"
@@ -178,19 +226,31 @@ void MainWindow::onMoveClicked() {
             }
 
             currentPointIndex++;
-            ui->btnMove->setEnabled(false); // Блокируем кнопку, станок пошел работать
+            ui->btnMove->setEnabled(false);
 
             serial->write(gcode.toUtf8());
         }
     } else {
-        // Ручной режим
+        // --- РУЧНОЙ РЕЖИМ (ДОБАВЛЕНА ОСЬ Z) ---
         QString gMode = ui->radioAbs->isChecked() ? "G90" : "G91";
+
+        // Считываем значения осей (если пусто — заменяем на "0")
         QString strX = ui->lineMoveX->text().isEmpty() ? "0" : ui->lineMoveX->text();
         QString strY = ui->lineMoveY->text().isEmpty() ? "0" : ui->lineMoveY->text();
-        QString strF = ui->lineMoveF->text().isEmpty() ? "1500" : ui->lineMoveF->text();
-        strX.replace(",", "."); strY.replace(",", ".");
 
-        gcode = QString("%1 G1 X%2 Y%3 F%4\n").arg(gMode, strX, strY, strF);
+        // ЧИТАЕМ ОСЬ Z ИЗ ТВОЕГО ПОЛЯ lineMoveZ
+        QString strZ = ui->lineMoveZ->text().isEmpty() ? "0" : ui->lineMoveZ->text();
+
+        QString strF = ui->lineMoveF->text().isEmpty() ? "1500" : ui->lineMoveF->text();
+
+        // Заменяем запятые на точки для стандартов G-кода
+        strX.replace(",", ".");
+        strY.replace(",", ".");
+        strZ.replace(",", ".");
+
+        // Формируем команду перемещения по трем осям: X, Y и Z!
+        gcode = QString("%1 G1 X%2 Y%3 Z%4 F%5\n").arg(gMode, strX, strY, strZ, strF);
+
         ui->logConsole->addItem("[Передача -> GRBL]: " + gcode.trimmed());
         serial->write(gcode.toUtf8());
     }
@@ -255,12 +315,9 @@ void MainWindow::onSelectJsonClicked() {
                 }
             }
 
-            // Устанавливаем индекс строго на выбранную кнопку
             currentPointIndex = i;
-
-            // Разблокируем кнопку управления, чтобы onMoveClicked сработал штатно
             ui->btnMove->setEnabled(true);
-            onMoveClicked(); // Метод окрасит строго ТЕКУЩУЮ точку в оранжевый цвет
+            onMoveClicked();
         });
 
         QListWidgetItem *item = new QListWidgetItem(ui->logConsole);
@@ -275,34 +332,129 @@ void MainWindow::onSelectJsonClicked() {
 }
 
 void MainWindow::onResetAutoModeClicked() {
-    // 1. Если автомат и так не был активен, просто очищаем лог на всякий случай
     if (!isAutoMode && routeButtons.empty()) {
         ui->logConsole->clear();
         ui->logConsole->addItem("[Система]: Готов к ручному вводу координат.");
         return;
     }
 
-    // 2. Выключаем режим автоматического обхода
     isAutoMode = false;
     currentPointIndex = 0;
 
-    // 3. Полностью очищаем память и интерфейс от интерактивных кнопок траектории
     ui->logConsole->clear();
-    routeButtons.clear(); // Очищаем вектор указателей
+    routeButtons.clear();
 
-    // 4. Возвращаем кнопку ручного движения в активное состояние
     ui->btnMove->setEnabled(true);
 
-    // 5. Выводим приветственное системное сообщение, подтверждающее ручной режим
     ui->logConsole->addItem("[Система]: Автоматический режим сброшен. Консоль переведена в ручное ЧПУ-управление.");
     ui->logConsole->scrollToBottom();
 
     qDebug() << "[Система]: Маршрут JSON успешно выгружен оператором.";
 }
 
+
+void MainWindow::onSetLtClicked() {
+    ui->lineLtX->setText(QString::number(wPosX, 'f', 3));
+    ui->lineLtY->setText(QString::number(wPosY, 'f', 3));
+    qDebug() << "[Сканирование]: Задан LT:" << wPosX << "," << wPosY;
+}
+
+void MainWindow::onSetRbClicked() {
+    ui->lineRbX->setText(QString::number(wPosX, 'f', 3));
+    ui->lineRbY->setText(QString::number(wPosY, 'f', 3));
+    qDebug() << "[Сканирование]: Задан RB:" << wPosX << "," << wPosY;
+}
+
+void MainWindow::onSelectDirClicked() {
+    QString dir = QFileDialog::getExistingDirectory(this, "Выберите папку для кадров сканирования", ui->lineSavePath->text());
+    if (!dir.isEmpty()) {
+        ui->lineSavePath->setText(dir);
+    }
+}
+
+void MainWindow::onStartScanClicked() {
+    if (ui->lineLtX->text().isEmpty() || ui->lineRbX->text().isEmpty()) {
+        QMessageBox::warning(this, "Внимание", "Пожалуйста, зафиксируйте точки LT и RB перед стартом!");
+        return;
+    }
+
+    // Проверяем шаг
+    QString stepText = ui->lineScanStep->text().trimmed();
+    if (stepText.isEmpty()) {
+        QMessageBox::warning(this, "Внимание", "Необходимо ввести шаг сканирования!");
+        ui->lineScanStep->setFocus();
+        return;
+    }
+
+    // Читаем высоту Z (если поле пустое — по умолчанию едем на Z = 0.0)
+    double zHeight = 0.0;
+    if (ui->lineMoveZ && !ui->lineMoveZ->text().isEmpty()) {
+        QString zText = ui->lineMoveZ->text().trimmed();
+        zText.replace(",", ".");
+        zHeight = zText.toDouble();
+    }
+
+    double step = stepText.toDouble();
+    double pxPerMm = ui->linePixelDensity->text().toDouble();
+    QString saveDir = ui->lineSavePath->text();
+    QPointF lt(ui->lineLtX->text().toDouble(), ui->lineLtY->text().toDouble());
+    QPointF rb(ui->lineRbX->text().toDouble(), ui->lineRbY->text().toDouble());
+
+    // Передаем zHeight пятым параметром в setupSession
+    if (m_scanController->setupSession(lt, rb, step, pxPerMm, zHeight, saveDir)) {
+        ui->btnStartScan->setEnabled(false);
+        ui->btnStopScan->setEnabled(true);
+        m_scanController->start();
+    } else {
+        QMessageBox::critical(this, "Ошибка", "Не удалось сгенерировать очередь перемещений.");
+    }
+}
+
+void MainWindow::onStopScanClicked() {
+    m_scanController->stop();
+    ui->btnStartScan->setEnabled(true);
+    ui->btnStopScan->setEnabled(false);
+}
+
+// === ОБРАБОТЧИКИ СИГНАЛОВ СКАНИРОВАНИЯ ===
+
+void MainWindow::onScanProgressUpdated(int current, int total) {
+    ui->progressScan->setMaximum(total);
+    ui->progressScan->setValue(current);
+}
+
+void MainWindow::onScanStatusTextChanged(const QString &text) {
+    // Формируем строчку: показывает статус шага и текущие координаты станка X, Y, Z
+    QString fullStatus = QString("%1 | Текущее положение: X: %2, Y: %3, Z: %4")
+                             .arg(text)
+                             .arg(wPosX, 0, 'f', 3)
+                             .arg(wPosY, 0, 'f', 3)
+                             .arg(grbl_Z, 0, 'f', 3);
+
+    ui->lblScanStatus->setText(fullStatus);
+}
+
+void MainWindow::onScanGcodeReady(const QString &gcode) {
+    if (serial->isOpen()) {
+        serial->write(gcode.toUtf8());
+        qDebug() << "[Отправка G-кода сканирования]:" << gcode.trimmed();
+    }
+}
+
+void MainWindow::onScanScreenshotRequested(const QPointF &coord) {
+    m_scanController->captureAndSaveFrame(m_lastCameraFrame, coord);
+}
+
+void MainWindow::onScanFinished() {
+    ui->btnStartScan->setEnabled(true);
+    ui->btnStopScan->setEnabled(false);
+    QMessageBox::information(this, "Сканирование", "Все сектора платы успешно сохранены!");
+}
+
 void MainWindow::parseStatusString(const QString &statusStr) {
     QString statusText = "Unknown";
     double x = 0.0, y = 0.0;
+    double z = 0.0; // Локальная переменная для координаты Z
     QString posType = statusStr.contains("MPos") ? "MPos" : "WPos";
 
     QStringList parts = statusStr.split('|');
@@ -326,32 +478,42 @@ void MainWindow::parseStatusString(const QString &statusStr) {
         y = coords[1].toDouble();
         wPosX = x; wPosY = y;
 
-        QString coordText = QString("Статус: %1 | %2: X: %3  Y: %4")
+        if (coords.size() >= 3) {
+            z = coords[2].toDouble();
+            grbl_Z = z;
+        }
+
+        // Обновляем вывод в верхнее поле координат (теперь с Z!)
+        QString coordText = QString("Статус: %1 | %2: X: %3  Y: %4  Z: %5")
                                 .arg(machineStatus).arg(posType)
-                                .arg(wPosX, 0, 'f', 3).arg(wPosY, 0, 'f', 3);
+                                .arg(wPosX, 0, 'f', 3)
+                                .arg(wPosY, 0, 'f', 3)
+                                .arg(grbl_Z, 0, 'f', 3);
         ui->lineEditCoordinates->setText(coordText);
 
-        // ЛОГИКА АВТОМАТИЧЕСКОГО ОБХОДА ПРИ ПОЛУЧЕНИИ IDLE
+        // Взаимодействие со сканером (Без изменений!)
+        if (m_scanController->isScanningActive() && machineStatus.toLower() == "idle") {
+            m_scanController->handleTargetReached();
+        }
+
+        // Твоя исходная логика автообхода при получении IDLE (Без изменений!)
         if (isAutoMode && machineStatus.toLower() == "idle") {
 
             if (currentPointIndex > 0) {
                 size_t finishedIdx = currentPointIndex - 1;
 
-                // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Проверяем, что станок ДЕЙСТВИТЕЛЬНО доехал до координат этой точки!
                 double diffX = std::abs(wPosX - route[finishedIdx].x);
                 double diffY = std::abs(wPosY - route[finishedIdx].y);
 
                 if (diffX < 0.05 && diffY < 0.05) {
                     route[finishedIdx].status = PointStatus::Completed;
 
-                    // КРАСИМ КНОПКУ В ЗЕЛЕНЫЙ ЦВЕТ ТОЛЬКО ПО ПРИБЫТИЮ НА ТЕКУЩИЕ КООРДИНАТЫ
                     if (finishedIdx < routeButtons.size() && routeButtons[finishedIdx]) {
                         routeButtons[finishedIdx]->setStyleSheet(
                             "QPushButton { background-color: #ccffcc; border: none; text-align: left; padding: 6px 10px; font-size: 13px; }"
                             );
                     }
 
-                    // ШАГАЕМ ДАЛЬШЕ: Переходим к следующей точке только если текущая успешно завершена
                     if (currentPointIndex < route.size()) {
                         if (!ui->btnMove->isEnabled()) {
                             ui->btnMove->setEnabled(true);
@@ -365,19 +527,13 @@ void MainWindow::parseStatusString(const QString &statusStr) {
 }
 
 void MainWindow::onLoadProjectClicked() {
-    // 1. Задаем приоритетный путь для разработки
     QString defaultPath = "C:/Users/ven/Documents/FlyProbeCncGui/Projects";
 
-    // Если папки по этому абсолютному пути не существует (например, на другом ПК),
-    // то откатываемся на папку "Projects" рядом с исполняемым файлом программы
     if (!QDir(defaultPath).exists()) {
         defaultPath = QCoreApplication::applicationDirPath() + "/Projects";
-
-        // Создаем её автоматически для удобства, если её ещё нет
         QDir().mkpath(defaultPath);
     }
 
-    // 2. Открываем проводник сразу в целевой папке
     QString projectDir = QFileDialog::getExistingDirectory(
         this,
         "Выбрать папку проекта ЧПУ",
@@ -386,7 +542,6 @@ void MainWindow::onLoadProjectClicked() {
 
     if (projectDir.isEmpty()) return;
 
-    // 3. Сканируем выбранную папку проекта с помощью нашего парсера
     ProjectParser parser;
     QString errorMsg;
     m_projectData = parser.scanProjectDir(projectDir, errorMsg);
@@ -396,18 +551,15 @@ void MainWindow::onLoadProjectClicked() {
         return;
     }
 
-    // Блокируем сигналы комбобокса, чтобы при его очистке не вызывалась лишняя отрисовка сцены
     ui->comboImages->blockSignals(true);
     ui->comboImages->clear();
 
-    // 4. Заполняем выпадающий список comboImages именами найденных JPG-файлов
     for (const QString &path : m_projectData.imagePaths) {
         ui->comboImages->addItem(QFileInfo(path).fileName());
     }
 
     ui->comboImages->blockSignals(false);
 
-    // 5. Если изображения найдены — принудительно выбираем первое и отрисовываем его
     if (!m_projectData.imagePaths.isEmpty()) {
         ui->comboImages->setCurrentIndex(0);
         onImageSelectionChanged(0);
@@ -417,40 +569,30 @@ void MainWindow::onLoadProjectClicked() {
     }
 }
 
+// ИСПРАВЛЕНИЕ ОШИБКИ 2: Берем данные точек напрямую из КЭША без чтения диска!
 void MainWindow::onImageSelectionChanged(int index) {
     if (index < 0 || index >= m_projectData.imagePaths.size()) return;
 
     ProjectParser parser;
     QString activeImagePath = m_projectData.imagePaths[index];
 
-    // 1. Загружаем выбранный JPG файл на графический холст ProbeView
     ui->probeGraphicsView->loadImage(activeImagePath);
 
-    // 2. Читаем бинарные метаданные JPG и вытаскиваем ID слоя (C++ аналог index_parser)
-    QString targetIndex = parser.extractIndexFromJpgBinary(activeImagePath);
-    qDebug() << "[Интерфейс]: Из бинарного JPG получен ID слоя:" << targetIndex;
+    QString targetId = parser.extractIndexFromJpgBinary(activeImagePath);
+    qDebug() << "[Интерфейс]: Запрос кэша для ID слоя:" << targetId;
 
-    // Очищаем текстовый список точек перед новой загрузкой
     ui->listPins->clear();
 
-    // 3. Если файл Points существует и ID слоя найден — парсим JSON-базу данных точек
-    if (!m_projectData.pointsFilePath.isEmpty() && !targetIndex.isEmpty()) {
-        bool ok = false;
-        // Читаем точки из JSON файла Points по нашему ID слоя
-        m_loadedPins = parser.parseJsonPointsForId(m_projectData.pointsFilePath, targetIndex, ok);
+    // Забираем данные из карты кэша слоев, созданного при парсинге проекта
+    if (m_projectData.layersCache.contains(targetId)) {
+        m_loadedPins = m_projectData.layersCache.value(targetId);
 
-        if (ok && !m_loadedPins.isEmpty()) {
-            // Накладываем интерактивные кружки разметки на сцену поверх фото платы
-            ui->probeGraphicsView->displayPins(m_loadedPins);
+        ui->probeGraphicsView->displayPins(m_loadedPins);
 
-            // Выводим список найденных точек в правое текстовое поле listPins
-            for (const PinData &pin : m_loadedPins) {
-                ui->listPins->addItem(pin.name);
-            }
-        } else {
-            ui->listPins->addItem("[Система]: Для данного слоя точек разметки в JSON не найдено.");
+        for (const PinData &pin : m_loadedPins) {
+            ui->listPins->addItem(pin.name);
         }
     } else {
-        ui->listPins->addItem("[Система]: Файл 'Points' не найден или в JPG отсутствуют ID-метаданные.");
+        ui->listPins->addItem("[Система]: Нет точек для этого слоя в кэше.");
     }
 }

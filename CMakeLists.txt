@@ -26,6 +26,8 @@ qt_add_executable(FlyProbeCncGui
     project_parser.h
     project_parser.cpp
     project_data.h
+    scan_data.h
+    scan_controller.h scan_controller.cpp
 )
 
 target_include_directories(FlyProbeCncGui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
