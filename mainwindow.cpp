@@ -71,6 +71,10 @@ MainWindow::MainWindow(QWidget *parent)
         }
     });
 
+    m_stitcher = new ImageStitcher(this);
+    connect(ui->btnStitch, &QPushButton::clicked, this, &MainWindow::onStitchClicked);
+    connect(m_stitcher, &ImageStitcher::statusUpdated, this, &MainWindow::onScanStatusTextChanged);
+
     connect(m_scanController, &ScanController::progressUpdated, this, &MainWindow::onScanProgressUpdated);
     connect(m_scanController, &ScanController::statusTextChanged, this, &MainWindow::onScanStatusTextChanged);
     connect(m_scanController, &ScanController::gcodeCommandReady, this, &MainWindow::onScanGcodeReady);
@@ -596,3 +600,70 @@ void MainWindow::onImageSelectionChanged(int index) {
         ui->listPins->addItem("[Система]: Нет точек для этого слоя в кэше.");
     }
 }
+
+void MainWindow::onStitchClicked() {
+    // 1. Получаем путь к папке с кадрами (по умолчанию берем путь сканирования)
+    QString sourceDir = ui->lineSavePath->text().trimmed();
+
+    // Если путь пуст или папки не существует, даем пользователю выбрать её вручную
+    if (sourceDir.isEmpty() || !QDir(sourceDir).exists()) {
+        sourceDir = QFileDialog::getExistingDirectory(this, "Выберите папку со снимками для склейки",
+                                                      QCoreApplication::applicationDirPath() + "/Projects");
+        if (sourceDir.isEmpty()) return;
+    }
+
+    // 2. Извлекаем шаг сканирования
+    QString stepText = ui->lineScanStep->text().trimmed();
+    if (stepText.isEmpty()) {
+        QMessageBox::warning(this, "Внимание", "Не задан шаг сканирования! Введите его на вкладке Scan.");
+        return;
+    }
+    double step = stepText.toDouble();
+
+    // 3. Извлекаем плотность пикселей камеры (калибровку px/mm)
+    QString densityText = ui->linePixelDensity->text().trimmed();
+    if (densityText.isEmpty()) {
+        QMessageBox::warning(this, "Внимание", "Не задана плотность пикселей! Введите её на вкладке Scan.");
+        return;
+    }
+    double pxPerMm = densityText.toDouble();
+
+    // Блокируем кнопку на время склейки, чтобы избежать повторных кликов
+    ui->btnStitch->setEnabled(false);
+    ui->logConsole->addItem("[Система]: Запущен процесс генерации панорамы...");
+
+    QString errorMessage;
+    // 4. Запускаем склейку
+    QImage panorama = m_stitcher->stitchFolder(sourceDir, step, pxPerMm, errorMessage);
+
+    if (panorama.isNull()) {
+        QMessageBox::critical(this, "Ошибка склейки", "Не удалось собрать панораму:\n" + errorMessage);
+        ui->btnStitch->setEnabled(true);
+        return;
+    }
+
+    ui->logConsole->addItem("[Система]: Панорама успешно сгенерирована!");
+
+    // 5. Предлагаем пользователю сохранить готовое изображение платы
+    QString savePath = QFileDialog::getSaveFileName(this, "Сохранить склеенную плату",
+                                                    sourceDir + "/Panorama_Full.png",
+                                                    "Изображения (*.png *.jpg)");
+
+    if (!savePath.isEmpty()) {
+        if (panorama.save(savePath)) {
+            ui->logConsole->addItem("[Система]: Панорама сохранена по пути: " + savePath);
+
+            // 6. Автоматически загружаем сохраненную панораму на твой GraphicsView на вкладке Edit Image!
+            ui->probeGraphicsView->loadImage(savePath);
+
+            QMessageBox::information(this, "Успех", "Склейка завершена! Изображение загружено на холст.");
+        } else {
+            QMessageBox::warning(this, "Внимание", "Не удалось записать файл на диск. Изображение временно загружено только на экран.");
+            // На всякий случай отобразим без сохранения на диск
+            ui->probeGraphicsView->loadImage(savePath); // или передать напрямую QPixmap, если loadImage поддерживает
+        }
+    }
+
+    ui->btnStitch->setEnabled(true);
+}
+

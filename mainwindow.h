@@ -8,12 +8,13 @@
 #include <QImage>
 #include <QPointF>
 #include <QVector>
-#include <QVideoFrame> // Добавлено для работы с кадрами Qt6
+#include <QVideoFrame>
 
 #include "Point.h"
 #include "scan.h"
 #include "project_parser.h"
 #include "scan_controller.h"
+#include "image_stitcher.h"
 
 using namespace std;
 
@@ -40,22 +41,19 @@ private slots:
     void onResetAutoModeClicked();
     void onLoadProjectClicked();
     void onImageSelectionChanged(int index);
-
-    // Новые слоты сканирования
     void onSetLtClicked();
     void onSetRbClicked();
     void onSelectDirClicked();
     void onStartScanClicked();
     void onStopScanClicked();
+    void onStitchClicked();
 
-    // Обработчики сигналов от контроллера сканирования
     void onScanProgressUpdated(int current, int total);
     void onScanStatusTextChanged(const QString &text);
     void onScanGcodeReady(const QString &gcode);
     void onScanScreenshotRequested(const QPointF &coord);
     void onScanFinished();
 
-    // Слот захвата кадра из QVideoSink (вместо несуществующего сигнала в Scan)
     void onNewVideoFrame();
 
 private:
@@ -77,11 +75,12 @@ private:
     bool isAutoMode = false;
     QTimer *statusTimer;
 
-    // Объекты камеры и сканирования
     Scan *scanner;
     ScanController *m_scanController;
-    QImage m_lastCameraFrame;         // Буфер последнего кадра камеры
+    QImage m_lastCameraFrame;
 
     void updateAvailablePorts();
     void parseStatusString(const QString &statusStr);
+    ImageStitcher *m_stitcher = nullptr;
+
 };

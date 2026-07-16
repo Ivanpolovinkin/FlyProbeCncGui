@@ -28,6 +28,8 @@ qt_add_executable(FlyProbeCncGui
     project_data.h
     scan_data.h
     scan_controller.h scan_controller.cpp
+    image_stitcher.h image_stitcher.cpp
+    calibration_view.h calibration_view.cpp
 )
 
 target_include_directories(FlyProbeCncGui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
